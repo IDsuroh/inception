@@ -219,7 +219,7 @@ pm.max_spare_servers = 3
 #!/bin/bash   #shebang
 set -e        #exit on error
 
-WP_PATH="/var/www/html" # stores thje path where WordPress live
+WP_PATH="/var/www/html" # stores the path where WordPress live
 mkdir -p "$WP_PATH"
 
 # Read secrets <each FILE variable contains a path to a secret file set by external file>
@@ -397,4 +397,51 @@ nginx -t    # checks nginx config for syntax/validity <- basically just a test
 # Start nginx in foreground as PID 1
 echo "Starting Nginx..."
 exec nginx -g "daemon off;" # replaces the shell script process with nginx
+```
+
+--conf/nginx.conf--
+
+```nginx
+user  www-data; # runs nginx workers as a non-root user
+
+events  { # set maximum number of clients one nginx worker can handle at once
+  worker_connections 1024;
+}
+
+http  {
+  include /etc/nginx/mime.types;  # loads mappings to help browsers interpret files correctly.
+
+  server  { # one server
+    listen  443 ssl;  # listen on port 443e (HTTPS) and the server uses TLS
+    server_name suroh.42.fr;
+
+    ssl_certificate /etc/nginx/ssl/nginx.crt;
+    ssl_certificate_key /etc/nginx/ssl/nginx.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    root  /var/www/html;
+    index index.php;
+    # different with index.html
+    # not a page but a main controller or entry point of the entire application.
+    # the front controller of the WordPress application
+    # not created manually unlike index.html
+    # more dynamic and serves different applications
+
+    location / {
+      try_files $uri $uri/ /index.php?$args;
+    }
+    # $uri is an nginx variable that contains the URL path the client requested.
+    # searches inside /var/www/html from file, folder, then falls back to index.php but with preserved query
+    # $uri -> Is there a real file/folder that matches the URL? If yes, serve directly the static file or the directory with index index.php inside it.
+    # /index.php?$args -> Send the request to WordPress’s main program, with the same query parameters the client sent.
+    # If user requests https://suroh.42.fr/about -> can't find about and $args is empty -> effectively /index.php
+    # If user requests https://suroh.42.fr/?s=nginx -> $args = s=nginx -> /index.php?s=nginx
+
+    location ~ \.php$ { # uses regex match, deos ths url end with .php, fallback /index.php?$args come here
+      fastcgi_pass  wordpress:9000; # send the request to a FastCGI server at host wordpress port 9000
+      include fastcgi_params; # fastcgi_params is a file that defines standard variables needed for FastCGI
+      fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; # Execute request to root+whateverphp
+    }
+  }
+}
 ```

@@ -770,3 +770,8 @@ docker compose up -d
 ```
 2. Refresh http://suroh.42.fr
 3. Check for the post
+
+## 9. adding the configuration to git (properly 2026 Feburary standards)
+```gitignore
+secrets/
+```

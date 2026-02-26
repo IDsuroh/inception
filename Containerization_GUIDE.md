@@ -17,6 +17,7 @@ FROM debian:bookworm
 RUN apt-get update && apt-get install -y mariadb-server && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /var/run/mysqld && chown -R mysql:mysql /var/run/mysqld && chmod 755 /var/run/mysqld
+RUN mkdir -p /var/log/mysql && chown -R mysql:mysql /var/log/mysql
 
 COPY conf/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf
 COPY tools/init_db.sh /usr/local/bin/init_db.sh
@@ -79,6 +80,7 @@ The script does automation like:
 set -e        # exits immediately if a command fails
 
 SOCKET="/var/run/mysqld/mysqld.sock"  # only stores a path as a text for now.
+MARKER="/var/lib/mysql/.inception_initialized"  # set a variable that acts as a permanent flag when re containerized
 
 # Read secrets if provided (best practice for subject)
 MYSQL_ROOT_PASSWORD="$(cat "$MYSQL_ROOT_PASSWORD_FILE")"
@@ -92,6 +94,12 @@ MYSQL_PASSWORD="$(cat "$MYSQL_PASSWORD_FILE")"
 : "${MYSQL_USER:?MYSQL_USER is required}"
 : "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}"
 : "${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}"
+
+# If already initialized before, just start MariaDB
+if [ -f "$MARKER" ]; then   # if this path exists and its a regular file,
+  echo "MariaDB already initialized. Starting normally..."
+  exec mysqld --user=mysql --datadir=/var/lib/mysql --socket="$SOCKET"  # run MariaDB server as linux user mysql and use the persistent database files in the volume. Then create and listen on the Unix socket file.
+fi
 
 echo "Starting MariaDB initialization..."
 
@@ -114,8 +122,15 @@ pid="$!"
 # & runs mysql in the background so the script still continues
 # $! is the PID of the most recently started background process
 
-echo "Waiting for MariaDB to be ready..."
+echo "Waiting for MariaDB to be ready..."   # added a timeout
+tries=30
 until mysqladmin --socket="$SOCKET" ping >/dev/null 2>&1; do
+  tries=$((tries - 1))
+  if [ "$tries" -le 0 ]; then
+    echo "ERROR: MariaDB did not become ready in time."
+    kill "$pid" 2>/dev/null || true
+    exit 1
+  fi
   sleep 1
 done
 echo "MariaDB is ready!"
@@ -130,6 +145,9 @@ CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
 GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'%';
 FLUSH PRIVILEGES;
 EOF
+
+touch "$MARKER"   # When we first initialize, we make this file so that when we re run, we dont init next time again.
+
 # sets root password to root
 # create database as MYSQL_DATABASE
 # create user with the name of MYSQL_USER(user from wp) with the password MYSQL_PASSWORD and this user can connect from anywhere
@@ -169,6 +187,7 @@ RUN apt-get update && apt-get install -y \
   wget \
   curl \
   ca-certificates \
+  default-mysql-client \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www/html
@@ -448,6 +467,8 @@ http  {
 
 ---
 
+## 4. .env configuration and password settings
+
 --.env--
 
 ```env
@@ -470,4 +491,282 @@ WORDPRESS_USER_EMAIL=avgusr@bigboss.com
 
 ---
 
---
+--secrets/db_root_password.txt--
+
+- MariaDB “root” account password
+- Used by the init_db.sh to:
+  - set the root password
+  - create the WordPress database
+  - create the normal DB user
+  - grant privileges
+
+--secrets/db_password.txt--
+
+- WordPress database user password
+- This is the password for the DB user created (MYSQL_USER, e.g. wp_user)
+- Needed in two places
+  - WordPress uses it to log into MariaDB.
+  - MariaDB needs it to create DB user
+
+--secrets/wp_admin_password.txt--
+- password for the WordPress admin account
+
+--secrets/wp_user_password.txt--
+- password for the WordPress user
+
+after creation:
+chmod 600 *.txt <- ownser can read/write but not others
+
+---
+
+## 5. docker-compose.yml
+
+--srcs/docker-compose.yml--
+
+Questions that I had.
+1. *restart: always* - what is it, and why still do “if checks” in Dockerfiles/entrypoints?
+  - *restart: always* is a runtime policy for the Docker when if the container stops for some reason (crash, process exit, etc.), Docker will try to bring it back up automatically. So it is completely separate from the initialization logic.
+
+2. *Same line vs '-' + new lines* - what’s the difference?
+  - When something is a list, we use '-' items.
+  - When something is a mapping, we use `KEY: VALUE`
+
+3. *depends_on* - what does it do?
+  - *depends_on* controls startup order and means to start whatever is listed on the depends_on first.
+  - e.g.) wordpress: depends_on: - mariadb means compose will start the mariadb container before starting the wordpress container.
+
+```yaml
+services:
+
+  mariadb:
+    build:
+      context: requirements/mariadb
+    image: mariadb
+    container_name: mariadb
+    restart: always
+    networks:
+      - inception-network
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_root_password
+      - db_password
+
+  wordpress:
+    build:
+      context: requirements/wordpress
+    image: wordpress
+    container_name: wordpress
+    restart: always
+    depends_on:
+      - mariadb
+    networks:
+      - inception-network
+    volumes:
+      - wordpress_data:/var/www/html
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      WORDPRESS_DB_HOST: ${WORDPRESS_DB_HOST}
+      WORDPRESS_DB_NAME: ${WORDPRESS_DB_NAME}
+      WORDPRESS_DB_USER: ${WORDPRESS_DB_USER}
+      WORDPRESS_DB_PASSWORD_FILE: /run/secrets/db_password
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX}
+      WORDPRESS_SITE_TITLE: ${WORDPRESS_SITE_TITLE}
+      WORDPRESS_ADMIN_USER: ${WORDPRESS_ADMIN_USER}
+      WORDPRESS_ADMIN_EMAIL: ${WORDPRESS_ADMIN_EMAIL}
+      WORDPRESS_ADMIN_PASSWORD_FILE: /run/secrets/wp_admin_password
+      WORDPRESS_USER: ${WORDPRESS_USER}
+      WORDPRESS_USER_EMAIL: ${WORDPRESS_USER_EMAIL}
+      WORDPRESS_USER_PASSWORD_FILE: /run/secrets/wp_user_password
+    secrets:
+      - db_password
+      - wp_admin_password
+      - wp_user_password
+
+  nginx:
+    build:
+      context: requirements/nginx
+    image: nginx
+    container_name: nginx
+    restart: always
+    depends_on:
+      - wordpress
+    networks:
+      - inception-network
+    volumes:
+      - wordpress_data:/var/www/html
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME}
+    ports:
+      - "443:443"
+
+networks:
+  inception-network:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  wordpress_data:
+
+secrets:
+  db_root_password:
+    file: ../secrets/db_root_password.txt
+  db_password:
+    file: ../secrets/db_password.txt
+  wp_admin_password:
+    file: ../secrets/wp_admin_password.txt
+  wp_user_password:
+    file: ../secrets/wp_user_password.txt
+```
+
+## 6. Moving Docker's storage root (so the named volumes live under /home/suroh/data)
+
+1. Create directory for the volumes
+```bash
+sudo mkdir -p /home/suroh/data/docker
+```
+
+2. Set Docker data-root
+```bash
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF' # feeds the block of text into a command as stdin
+{
+  "data-root": "/home/suroh/data/docker"
+}
+EOF # Store Docker's data under this path
+```
+- we user tee because it writes input to a file and overwrites the file. If the file does not exist, it creates it.
+
+3. Load the config
+```bash
+sudo systemctl restart docker
+# or
+sudo systemctl start docker
+```
+
+4. Check if the mountpoint changed
+```bash
+docker volume ls # check the volumes
+
+docker volume inspect nameofthevolume | grep Mountpoint -n
+```
+
+'docker controls'
+
+sudo systemctl is-active docker
+- checks if docker is active or not
+
+docker compose up --build -d (should run only on the directory where the docker-compose.yml exists)
+--build -> Compose ensures the latest dockerfile script changes to be applied to the image.
+-d -> detached mode, or runs containers in the background.
+
+## 7. MAKEFILE
+
+```make
+COMPOSE_FILE = srcs/docker-compose.yml
+PROJECT = inception
+
+.PHONY: all build up down logs ps clean fclean re
+
+all: up
+
+up:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) up -d --build
+
+build:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) build
+
+down:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) down
+
+logs:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) logs -f
+
+ps:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) ps
+
+clean:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) down -v
+
+fclean:
+  docker compose -p $(PROJECT) -f $(COMPOSE_FILE) down -v --rmi all
+
+re: fclean up
+```
+
+COMPOSE_FILE = srcs/docker-compose.yml
+- defines a Mkae variable named "COMPOSE_FILE"
+
+Phony targets
+- declares as commands and not file names
+
+all: up
+
+docker compose -p $(PROJECT) -f $(COMPOSE_FILE) up -d --build
+- up -> create/start containers
+- --build -> rebuild images first if needed
+- -d -> run in background
+
+docker compose -> uses docker compose v2
+-p $(PROJECT) -> project name set to inception
+-f $(COMPOSE_FILE) ->  -f means which compose files to use (use srcs/docker-compose.yml)
+
+down
+- stops containers
+- removes containers
+- removes the project network
+X does not remove named volumes
+X does not remove images
+
+logs -f
+- shows live output (stdout/stderr) from all containers
+
+ps target
+- shows the status of compose services
+
+docker compose -p $(PROJECT) -f $(COMPOSE_FILE) down -v
+- stops containers
+- deletes volumes
+- keeps images
+
+down -v --rmi all
+- remove Image
+- all images
+
+## 8. once everything is done...
+
+```bash
+make
+# or
+make up
+
+make ps
+# to check if the containers are running
+
+make logs
+# to monitor if there are errors or any restart loops
+```
+
+Making the domain resolve to the machine
+1. Edit /etc/hosts through sudo nano
+2. add '127.0.0.1 suroh.42.fr'
+3. turn off proxy in settings->network settings if on
+4. go to https://suroh.42.fr
+5. go to https://suroh.42.fr/wp-admin to log in with admin credentials
+6. doodle around and make a quick post page or whatever
+
+How to check persistence
+1. Restart containers without deleting volumes
+```bash
+make down
+make up
+# or
+docker compose down
+docker compose up -d
+```
+2. Refresh http://suroh.42.fr
+3. Check for the post

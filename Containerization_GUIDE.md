@@ -770,8 +770,64 @@ docker compose up -d
 ```
 2. Refresh http://suroh.42.fr
 3. Check for the post
-pro
+
+---
+
 ## 9. adding the configuration to git
 ```gitignore
 secrets/
+```
+
+---
+
+## 10. Check NGINX port 443
+```bash
+ss -lntp
+```
+This commands should not show ':80'
+```bash
+docker ps
+```
+should show that nginx is open to 443 only
+
+*How to check SSL/TLS connection*
+```bash
+curl -v https://suroh.42.fr
+```
+Will show information about TLS
+
+```bash
+docker images
+```
+Will show image names
+
+---
+
+## 11. How to log in to database and check data
+
+Enter the container
+```bash
+docker exec -it mariadb bash
+```
+-it flag means interactive and allocates a terminal
+So, it means to open an interactive terminal session inside the container and start a bash shell
+
+Check password
+```bash
+cat /run/secrets/db_root_password
+```
+
+login
+```bash
+mysql -u root -p
+# or
+mysql -u wp_user -p
+```
+-p is a flag for asking for a password interactively
+
+show database
+```bash
+SHOW DATABASES;
+USE wordpress_db;
+SHOW TABLES;
 ```

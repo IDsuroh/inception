@@ -25,6 +25,26 @@ This project uses Docker to containerize and isolate each service of the infrast
 Instead of installing NGINX, WordPress, and MariaDB directly on the virtual machine,
 each service runs inside its own dedicated container.
 
+Docker is a containerization platform that allows applications to run in isolated environments.
+
+1. Image
+- the blueprint of how the container is going to be built.
+2. Container
+- running instance of an image.
+3. Volumes
+- persistent data
+4. Networks
+- docker creates isolated networks so containers can communicate internally within themselves
+
+Docker Compose is an orchestration tool that allows to define and run many commands at once.
+This is why we made docker-compose.yml
+
+Why build image then container? Why not build everything at once?
+- Image is just a recipe of how to make the container, so we can have once recipe, and cook many times.
+- Docker separates build-time and runtime.
+- The image is an immutable template created from the Dockerfile.
+- Containers are runtime instances of that image. 
+
 Docker allows:
 
 - Service isolation

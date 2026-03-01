@@ -1,4 +1,5 @@
 ## Prerequisites
+
 ```bash
 sudo apt update
 sudo apt upgrade -y
@@ -11,6 +12,8 @@ docker --version
 docker-compose --version
 ```
 Logout and login again.
+
+---
 
 ## 1. MariaDB
 

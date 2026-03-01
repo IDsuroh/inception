@@ -626,6 +626,10 @@ secrets:
 
 ## 6. Moving Docker's storage root (so the named volumes live under /home/suroh/data)
 
+This process is to change the Docker's global storage directory by setting the ademon's data-root
+Basically, we are telling the Docker daemon to store all Docker-managed state under that path.
+Changing Docker’s data-root so that all Docker-managed data, including named volumes, is stored under /home/suroh/data
+
 1. Create directory for the volumes
 ```bash
 sudo mkdir -p /home/suroh/data/docker

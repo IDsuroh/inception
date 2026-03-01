@@ -1,3 +1,17 @@
+## Prerequisites
+```bash
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y git curl wget vim nano ca-certificates gnupg lsb-release
+sudo apt install -y docker.io docker-compose docker-compose-plugin
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker $USER
+docker --version
+docker-compose --version
+```
+Logout and login again.
+
 ## 1. MariaDB
 
 --Dockerfile--
